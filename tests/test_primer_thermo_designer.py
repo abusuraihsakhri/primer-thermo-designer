@@ -3,9 +3,13 @@ Automated Pytest Test Suite for Primer Thermo Designer.
 Domain: Post-Quantum Cryptography & Hardware Security
 Standard: NIST FIPS 203/204/205 / ISO/IEC 17825 Standards
 """
+import os
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# Set test audit key before importing agents
+os.environ.setdefault("AUDIT_SECRET_KEY", "test-audit-key-for-unit-tests-only")
 
 import pytest
 from agents.base import PHIGuard, AuditLogger, SecurityException
