@@ -71,3 +71,20 @@ def test_forward_candidate_at_last_valid_start_is_not_skipped():
 def test_invalid_design_controls_raise(kwargs):
     with pytest.raises(ValueError):
         design_primer_pairs("ACGT" * 40, product_size_range=(40, 100), **kwargs)
+
+
+
+def test_pcr_api_check_returns_real_thermodynamics():
+    from agents.api import PrimerCheckRequest, check_primer
+    data = check_primer(PrimerCheckRequest(sequence="ACGTGCATCGTAGCTAGCTG"))
+    assert data["sequence"] == "ACGTGCATCGTAGCTAGCTG"
+    assert data["tm_c"] == pytest.approx(calc_tm(data["sequence"]))
+    assert 0 <= data["gc_percent"] <= 100
+
+
+def test_pcr_api_design_rejects_invalid_fasta_records():
+    from fastapi import HTTPException
+    from agents.api import PrimerDesignRequest, design_primers
+    with pytest.raises(HTTPException) as exc:
+        design_primers(PrimerDesignRequest(target=">first\nACGT\n>second\nTGCA"))
+    assert exc.value.status_code == 422
