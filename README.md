@@ -1,206 +1,78 @@
 # Primer Thermo Designer
 
-> **Domain:** PCR Primer Design & Thermodynamic Validation
+PCR primer design and assessment using a Python implementation of SantaLucia (1998) nearest-neighbor DNA duplex thermodynamics.
 
-<div align="center">
+## What it does
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12-3776AB.svg?logo=python&logoColor=white)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688.svg?logo=fastapi&logoColor=white)
-![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)
+- Finds and ranks forward/reverse primer pairs by predicted melting temperature, amplicon size and sequence-complementarity heuristics
+- Calculates salt-adjusted Tm, GC content, 3′ GC clamp, homopolymer runs and approximate 3′ stability
+- Screens self-dimers, heterodimers and hairpins using contiguous complementarity heuristics
+- Accepts a raw ACGT target or **one** FASTA record, with zero-based, half-open target coordinates
+- Exports candidate pairs to CSV in the browser
 
-</div>
+**Scope:** This is a candidate-screening tool, not a substitute for Primer3, genome-wide off-target searches, Mg²⁺/dNTP-aware models, or wet-lab verification. The supplied Tm model approximates monovalent salt effects and perfect-match duplexes; thermodynamic scores and structural flags are heuristic.
 
----
+## Browser application
 
-## 📖 What It Does
+The interface in `web/` runs the **same** `primer_designer.py` engine inside the browser using Pyodide (Python/WebAssembly). No application server or API credentials are needed. Sequence processing stays inside the browser; the first launch downloads the Pyodide runtime from jsDelivr. No sequence is submitted to that CDN, but loading runtime assets does make a network request.
 
-Primer Thermo Designer designs and validates PCR primer pairs from a target DNA sequence using
-the SantaLucia (1998) unified nearest-neighbor (NN) thermodynamic
-parameters for melting-temperature (Tm) prediction, combined with
-sliding-window complementarity scoring for self-dimer, heterodimer and
-hairpin screening (in the spirit of Primer3's core heuristics).
-
-Reference:
-    SantaLucia J Jr. "A unified view of polymer, dumbbell, and
-    oligonucleotide DNA nearest-neighbor thermodynamics."
-    Proc Natl Acad Sci USA. 1998;95(4):1460-1465.
-
----
-
-## ⚙️ Key Capabilities
-
-### Core Primer Design Engine (`primer_designer.py`)
-
-- **SantaLucia Tm Calculation** — Nearest-neighbor thermodynamic model with salt correction
-- **Primer Pair Generation** — Enumerates candidate pairs with configurable size/length/Tm ranges
-- **Dimer Screening** — Sliding-window complementarity scoring for self-dimer and heterodimer detection
-- **Hairpin Detection** — Local self-complementarity scan for intramolecular hairpin structures
-- **GC Clamp Validation** — Ensures appropriate 3' end stability
-- **Homopolymer Run Detection** — Screens for problematic repetitive sequences
-
-### Enterprise Security & Audit (`agents/`)
-
-- **Zero-PHI Outbound Interceptor** — Regex-based detection blocking SSNs, MRNs, phone numbers, and patient identifiers
-- **Tamper-Evident HMAC-SHA256 Audit Trail** — Chained, cryptographically signed logs for every evaluation
-- **FastAPI REST API** — OpenAPI 3.1 REST endpoints with Prometheus metrics (`/metrics`)
-
----
-
-## 💻 Installation
+To preview locally after cloning:
 
 ```bash
-# Clone the repository
+mkdir -p _site
+cp web/index.html web/app.js web/style.css primer_designer.py _site/
+python -m http.server --directory _site 8000
+# Open http://localhost:8000
+```
+
+GitHub Actions includes a Pages deployment workflow for `master`. A public deployment link will be added after the deployed site has been verified.
+
+## Python CLI
+
+Requires Python 3.10 or later. The thermodynamics engine itself uses only the standard library.
+
+```bash
 git clone https://github.com/abusuraihsakhri/primer-thermo-designer.git
 cd primer-thermo-designer
+python -m pip install -e ".[dev]"
 
-# Install dependencies
-pip install fastapi uvicorn pydantic
-
-# For development (includes pytest)
-pip install -e ".[dev]"
-```
-
----
-
-## 🧪 CLI Usage
-
-### 1. Design Primer Pairs
-
-```bash
-# Design primers for a target sequence
-python primer_designer.py design --sequence ACGTGCATCGTAGCTAGCTGATCGATCGATCG --product-min 100 --product-max 300
-
-# Using a FASTA file
-python primer_designer.py design --fasta target.fasta --product-min 100 --product-max 300
-```
-
-### 2. Check a Single Primer
-
-```bash
 python primer_designer.py check ACGTGCATCGTAGCTAGCTG
+python primer_designer.py design --fasta target.fasta --product-min 100 --product-max 300
+python -m pytest -q
 ```
 
-### 3. Parameters
+The installed `primer-design` console entry point provides the `design`/`check` commands. The existing `primer-thermo-designer` entry point continues to operate the auxiliary audit CLI.
 
-| Parameter | Description | Default |
-|:----------|:------------|:--------|
-| `--sequence` | Target DNA sequence (ACGT) | — |
-| `--fasta` | Path to FASTA file | — |
-| `--product-min` | Minimum amplicon size (bp) | 100 |
-| `--product-max` | Maximum amplicon size (bp) | 300 |
-| `--primer-len-min` | Minimum primer length (nt) | 18 |
-| `--primer-len-max` | Maximum primer length (nt) | 25 |
-| `--tm-min` | Minimum acceptable Tm (°C) | 57.0 |
-| `--tm-max` | Maximum acceptable Tm (°C) | 63.0 |
-| `--target-tm` | Ideal Tm for ranking (°C) | 60.0 |
-| `--primer-conc` | Primer strand concentration (nM) | 250 |
-| `--na-conc` | Monovalent salt concentration (mM) | 50 |
-| `--gc-min` | Minimum primer GC% | 30 |
-| `--gc-max` | Maximum primer GC% | 70 |
-| `--max-poly-run` | Maximum homopolymer run length | 4 |
-| `--no-gc-clamp` | Disable GC clamp requirement | False |
-| `--top` | Number of top pairs to report | 5 |
+Main defaults: 18–25 nt primer length, 57–63 °C Tm, 30–70% GC, 100–300 bp amplicon, 250 nM primer concentration and 50 mM monovalent salt. Use `python primer_designer.py design --help` for all options.
 
----
-
-## 🚀 REST API Server
-
-### Start the Server
+## Optional API and audit service
 
 ```bash
-# Using the CLI
-python cli.py serve --host 127.0.0.1 --port 8000
-
-# Or directly
+export AUDIT_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_hex(32))')"
 uvicorn agents.api:app --host 127.0.0.1 --port 8000
 ```
 
-### Endpoints
+- `POST /api/primer/design`: rank primer pairs from JSON design parameters
+- `POST /api/primer/check`: assess one primer sequence
+- `GET /health`: service health
+- Legacy `/api/audit`, `/api/chat`, `/api/audit/logs`, and `/metrics` remain available for compatibility; they are **not** PCR thermodynamics calculations.
+- `/metrics` currently returns JSON, not Prometheus exposition text.
+- The audit ledger is **in-memory** and HMAC-chained; it is not persistent or a regulatory-grade audit system. Its pattern-based PHI filter does not establish clinical privacy compliance.
 
-| Method | Path | Description |
-|:-------|:-----|:------------|
-| GET | `/health` | Health check |
-| GET | `/metrics` | Prometheus operational metrics |
-| POST | `/api/audit` | Submit task for evaluation |
-| POST | `/api/chat` | Supervisory chat query |
-| GET | `/api/audit/logs` | Retrieve HMAC audit trail |
+Container operation is available through `Dockerfile` and `docker-compose.yml`; set `AUDIT_SECRET_KEY` using the provided `.env.example` before launching.
 
----
+## Scientific reference
 
-## 🐳 Docker Deployment
+SantaLucia J Jr. A unified view of polymer, dumbbell, and oligonucleotide DNA nearest-neighbor thermodynamics. *Proc Natl Acad Sci USA*. 1998;95(4):1460–1465. https://doi.org/10.1073/pnas.95.4.1460
 
-```bash
-# Build and run with Docker Compose
-cp .env.example .env
-# Edit .env to set AUDIT_SECRET_KEY
-docker-compose up --build
+## Testing and implementation
 
-# Or use Docker directly
-docker build -t primer-thermo-designer .
-docker run -p 8000:8000 -e AUDIT_SECRET_KEY=your-secret-key primer-thermo-designer
-```
+- Scientific engine: Python standard library
+- Optional API: FastAPI, Pydantic, Uvicorn
+- Browser UI: HTML, CSS, JavaScript, Pyodide 0.27.7
+- CI: Python 3.10, 3.11 and 3.12; Pytest and JavaScript syntax checks
+- Supported browsers: modern evergreen browsers with WebAssembly and network access to jsDelivr; other environments are not validated.
 
----
+## License
 
-## 🧪 Testing
-
-```bash
-# Run all tests
-pytest -v
-
-# Run specific test files
-pytest test_primer_designer.py -v
-pytest tests/ -v
-```
-
-### Test Coverage
-
-- **test_primer_designer.py** — 19 tests for core primer design functionality
-- **tests/test_primer_thermo_designer.py** — 5 tests for enterprise security features
-- **tests/test_enrichment.py** — 2 tests for enrichment modules
-
-**Total: 24 tests**
-
----
-
-## 📁 Project Structure
-
-```
-primer-thermo-designer/
-├── primer_designer.py      # Core primer design engine (SantaLucia NN)
-├── cli.py                  # Main CLI interface
-├── enrichment.py           # Enrichment feature modules
-├── simulator.py            # High-throughput simulation/testing
-├── agents/
-│   ├── __init__.py
-│   ├── api.py              # FastAPI REST server
-│   ├── base.py             # PHI guard, HMAC audit trail
-│   ├── models.py           # Pydantic data models
-│   ├── supervisor.py       # Multi-worker orchestrator
-│   ├── workers.py          # Specialized evaluation workers
-│   ├── llm_factory.py      # LLM provider abstraction
-│   ├── learning.py         # Bayesian calibration engine
-│   ├── metrics.py          # Prometheus metrics exporter
-│   └── streamer.py         # WebSocket telemetry
-├── tests/                  # Pytest test suite
-├── web/index.html          # Operations console UI
-├── Dockerfile
-├── docker-compose.yml
-├── pyproject.toml
-└── README.md
-```
-
----
-
-## 🔒 Security
-
-- **No hardcoded secrets** — `AUDIT_SECRET_KEY` must be set via environment variable
-- **PHI outbound guard** — Prevents accidental leakage of patient identifiers
-- **HMAC-SHA256 audit trail** — Tamper-evident logging with chained hashes
-
----
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+[MIT](LICENSE)
