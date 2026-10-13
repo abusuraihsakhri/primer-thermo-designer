@@ -19,6 +19,8 @@ from __future__ import annotations
 import argparse
 import math
 import sys
+import heapq
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
@@ -529,9 +531,17 @@ def design_primer_pairs(
         **eval_kwargs,
     )
 
-    pairs: List[PrimerPair] = []
+    # Restrict pairing to reverse primers whose end coordinates can
+    # yield an amplicon within the requested product range. Keep only
+    # the best top_n matches to avoid quadratic memory growth.
+    rev_candidates.sort(key=lambda candidate: candidate.end)
+    rev_ends = [candidate.end for candidate in rev_candidates]
+    best_pairs: List[Tuple[float, int, PrimerPair]] = []
+    index = 0
     for f in fwd_candidates:
-        for r in rev_candidates:
+        lower = bisect_left(rev_ends, f.start + min_product)
+        upper = bisect_right(rev_ends, f.start + max_product)
+        for r in rev_candidates[lower:upper]:
             product_size = r.end - f.start
             if r.start < f.end:
                 continue  # primers must not overlap (adjacent ends are allowed)
@@ -545,15 +555,18 @@ def design_primer_pairs(
                     "complementary bases between primers"
                 )
             score = score_pair(f, r, heterodimer, target_tm)
-            pairs.append(
-                PrimerPair(
-                    forward=f, reverse=r, product_size=product_size,
-                    heterodimer=heterodimer, score=score, warnings=warnings,
-                )
+            pair = PrimerPair(
+                forward=f, reverse=r, product_size=product_size,
+                heterodimer=heterodimer, score=score, warnings=warnings,
             )
+            entry = (-score, -index, pair)
+            index += 1
+            if len(best_pairs) < top_n:
+                heapq.heappush(best_pairs, entry)
+            elif entry > best_pairs[0]:
+                heapq.heapreplace(best_pairs, entry)
 
-    pairs.sort(key=lambda p: p.score)
-    return pairs[:top_n]
+    return [item[2] for item in sorted(best_pairs, key=lambda e: (-e[0], -e[1]))]
 
 
 # ---------------------------------------------------------------------------
