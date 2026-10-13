@@ -7,9 +7,6 @@ import json
 import os
 import sys
 
-# Set default audit key for development if not provided
-os.environ.setdefault("AUDIT_SECRET_KEY", "dev-audit-key-change-in-production")
-
 from agents.models import SystemTaskPayload
 from agents.supervisor import SystemSupervisor
 from agents.base import AuditLogger

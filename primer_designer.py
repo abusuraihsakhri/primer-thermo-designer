@@ -19,6 +19,8 @@ from __future__ import annotations
 import argparse
 import math
 import sys
+import heapq
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
@@ -58,6 +60,8 @@ VALID_BASES = set("ACGT")
 # ---------------------------------------------------------------------------
 def validate_sequence(seq: str) -> str:
     """Uppercase and validate a DNA sequence contains only A/C/G/T."""
+    if not isinstance(seq, str):
+        raise ValueError("Sequence must be a string.")
     seq = seq.strip().upper()
     if not seq:
         raise ValueError("Sequence is empty.")
@@ -81,12 +85,28 @@ def gc_fraction(seq: str) -> float:
 
 
 def parse_fasta(text: str) -> str:
-    """Minimal stdlib FASTA parser: concatenates all sequence lines,
-    ignoring header lines starting with '>'. If no '>' header is present,
-    the whole text is treated as raw sequence."""
-    lines = text.splitlines()
-    seq_lines = [ln.strip() for ln in lines if ln.strip() and not ln.startswith(">")]
-    return "".join(seq_lines)
+    """Read one FASTA record or a raw DNA sequence.
+
+    Multiple records are rejected: joining them would create an artificial
+    PCR template and may produce primers spanning record boundaries.
+    """
+    if not isinstance(text, str):
+        raise ValueError("FASTA input must be text.")
+    sequence = []
+    record_count = 0
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith(">"):
+            record_count += 1
+            if record_count > 1:
+                raise ValueError("Multiple FASTA records are not supported; select one target.")
+            if sequence:
+                raise ValueError("FASTA header must precede sequence lines.")
+        else:
+            sequence.append(line)
+    return "".join(sequence)
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +129,9 @@ def calc_tm(
     n = len(seq)
     if n < 2:
         raise ValueError("Primer must be at least 2 nt long for NN Tm calculation.")
+    for value, label in ((primer_conc_m, "Primer concentration"), (na_conc_m, "Salt concentration")):
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"{label} must be finite and greater than zero.")
 
     dH = 0.0
     dS = 0.0
@@ -179,6 +202,8 @@ def has_gc_clamp(seq: str, window: int = 5, min_gc: int = 1, max_gc: int = 3) ->
     number of G/C bases within the last `window` nt to fall in a
     moderate range (too few = weak 3' anneal, too many = excess
     3' stability / mispriming risk)."""
+    if not seq or window < 1:
+        return False
     if len(seq) < window:
         window = len(seq)
     tail = seq[-window:]
@@ -452,6 +477,21 @@ def design_primer_pairs(
     target = validate_sequence(target)
     n = len(target)
     min_product, max_product = product_size_range
+    min_len, max_len = primer_len_range
+    if min_len < 2 or max_len < min_len:
+        raise ValueError("Invalid primer_len_range; lengths must be at least 2 nt.")
+    if not (math.isfinite(tm_range[0]) and math.isfinite(tm_range[1]) and
+            tm_range[0] <= tm_range[1] and math.isfinite(target_tm)):
+        raise ValueError("Invalid Tm range or target Tm.")
+    if not (0 <= gc_range[0] <= gc_range[1] <= 1):
+        raise ValueError("Invalid GC range; expected fractions between zero and one.")
+    if max_poly_run < 1 or top_n < 1:
+        raise ValueError("max_poly_run and top_n must be positive integers.")
+    if not (math.isfinite(primer_conc_nm) and primer_conc_nm > 0 and
+            math.isfinite(na_conc_mm) and na_conc_mm > 0):
+        raise ValueError("Primer and salt concentrations must be finite and positive.")
+    if not math.isfinite(three_prime_dg_threshold):
+        raise ValueError("3' stability threshold must be finite.")
     if min_product < 2 or max_product < min_product:
         raise ValueError("Invalid product_size_range.")
     if n < min_product:
@@ -482,7 +522,7 @@ def design_primer_pairs(
     # minimum product size from the start of the target.
     fwd_candidates = generate_candidates(
         target, "forward", primer_len_range,
-        search_start=0, search_end=max(0, n - min_product + 1),
+        search_start=0, search_end=min(n, n - min_product + max_len + 1),
         **eval_kwargs,
     )
     rev_candidates = generate_candidates(
@@ -491,12 +531,34 @@ def design_primer_pairs(
         **eval_kwargs,
     )
 
-    pairs: List[PrimerPair] = []
+    # Restrict pairing to reverse primers whose end coordinates can
+    # yield an amplicon within the requested product range. Keep only
+    # the best top_n matches to avoid quadratic memory growth.
+    rev_candidates.sort(key=lambda candidate: candidate.end)
+    rev_ends = [candidate.end for candidate in rev_candidates]
+    # Protect both the browser and the API against prohibitively expensive
+    # unrestricted searches. The estimate is conservative: overlapping
+    # primer pairs are counted even though they are filtered later.
+    candidate_evaluations = 0
+    bounds = []
     for f in fwd_candidates:
-        for r in rev_candidates:
+        lower = bisect_left(rev_ends, f.start + min_product)
+        upper = bisect_right(rev_ends, f.start + max_product)
+        candidate_evaluations += upper - lower
+        if candidate_evaluations > 500_000:
+            raise ValueError(
+                "Search exceeds the 500,000-pair screening budget. "
+                "Narrow the amplicon, primer-length, GC or Tm ranges."
+            )
+        bounds.append((lower, upper))
+
+    best_pairs: List[Tuple[float, int, PrimerPair]] = []
+    index = 0
+    for f, (lower, upper) in zip(fwd_candidates, bounds):
+        for r in rev_candidates[lower:upper]:
             product_size = r.end - f.start
-            if r.start <= f.end:
-                continue  # primers must not overlap
+            if r.start < f.end:
+                continue  # primers must not overlap (adjacent ends are allowed)
             if not (min_product <= product_size <= max_product):
                 continue
             heterodimer = sliding_window_complementarity(f.seq, r.seq)
@@ -507,15 +569,18 @@ def design_primer_pairs(
                     "complementary bases between primers"
                 )
             score = score_pair(f, r, heterodimer, target_tm)
-            pairs.append(
-                PrimerPair(
-                    forward=f, reverse=r, product_size=product_size,
-                    heterodimer=heterodimer, score=score, warnings=warnings,
-                )
+            pair = PrimerPair(
+                forward=f, reverse=r, product_size=product_size,
+                heterodimer=heterodimer, score=score, warnings=warnings,
             )
+            entry = (-score, -index, pair)
+            index += 1
+            if len(best_pairs) < top_n:
+                heapq.heappush(best_pairs, entry)
+            elif entry > best_pairs[0]:
+                heapq.heapreplace(best_pairs, entry)
 
-    pairs.sort(key=lambda p: p.score)
-    return pairs[:top_n]
+    return [item[2] for item in sorted(best_pairs, key=lambda e: (-e[0], -e[1]))]
 
 
 # ---------------------------------------------------------------------------
