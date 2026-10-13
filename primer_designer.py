@@ -536,11 +536,25 @@ def design_primer_pairs(
     # the best top_n matches to avoid quadratic memory growth.
     rev_candidates.sort(key=lambda candidate: candidate.end)
     rev_ends = [candidate.end for candidate in rev_candidates]
-    best_pairs: List[Tuple[float, int, PrimerPair]] = []
-    index = 0
+    # Protect both the browser and the API against prohibitively expensive
+    # unrestricted searches. The estimate is conservative: overlapping
+    # primer pairs are counted even though they are filtered later.
+    candidate_evaluations = 0
+    bounds = []
     for f in fwd_candidates:
         lower = bisect_left(rev_ends, f.start + min_product)
         upper = bisect_right(rev_ends, f.start + max_product)
+        candidate_evaluations += upper - lower
+        if candidate_evaluations > 500_000:
+            raise ValueError(
+                "Search exceeds the 500,000-pair screening budget. "
+                "Narrow the amplicon, primer-length, GC or Tm ranges."
+            )
+        bounds.append((lower, upper))
+
+    best_pairs: List[Tuple[float, int, PrimerPair]] = []
+    index = 0
+    for f, (lower, upper) in zip(fwd_candidates, bounds):
         for r in rev_candidates[lower:upper]:
             product_size = r.end - f.start
             if r.start < f.end:
