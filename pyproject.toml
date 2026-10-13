@@ -38,6 +38,7 @@ dev = [
 
 [project.scripts]
 primer-thermo-designer = "cli:main"
+primer-design = "primer_designer:main"
 
 [tool.setuptools]
 py-modules = ["cli", "primer_designer", "enrichment", "simulator"]
