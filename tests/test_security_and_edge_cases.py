@@ -148,10 +148,10 @@ class TestFastaParser:
         result = parse_fasta(fasta)
         assert result == "ATCGATCG"
 
-    def test_multiple_sequences_concatenated(self):
+    def test_multiple_sequences_rejected(self):
         fasta = ">seq1\nATCG\n>seq2\nGCTA"
-        result = parse_fasta(fasta)
-        assert result == "ATCGGCTA"
+        with pytest.raises(ValueError, match="Multiple FASTA"):
+            parse_fasta(fasta)
 
     def test_raw_sequence_no_header(self):
         result = parse_fasta("ATCGATCG")
